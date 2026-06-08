@@ -26,20 +26,20 @@
   - 하드코딩 데이터를 초기화 기준값으로 보존한다
   - **파일**: `trias_standalone.html`
 
-- [ ] 5. `setUploadMsg(type, text)` 헬퍼 함수 구현
+- [x] 5. `setUploadMsg(type, text)` 헬퍼 함수 구현
   - `#upload-msg` 요소의 className과 textContent를 업데이트한다
   - type: `"loading"` | `"ok"` | `"err"` | `""`
   - `"ok"` 일 때만 `#btn-reset` 을 표시한다
   - design.md 섹션 4-7 참고
   - **파일**: `trias_standalone.html`
 
-- [~] 6. `rebuildSheetSelect()` 함수 구현
+- [ ] 6. `rebuildSheetSelect()` 함수 구현
   - `#sel-sheet` 드롭다운을 현재 `DATA`의 키 목록으로 재구성한다
   - 기존 option을 모두 제거한 뒤 새로 추가한다
   - design.md 섹션 4-5 참고
   - **파일**: `trias_standalone.html`
 
-- [~] 7. `sheetToData(wb, sheetName)` 함수 구현
+- [ ] 7. `sheetToData(wb, sheetName)` 함수 구현
   - `XLSX.utils.sheet_to_json()` 으로 rows 배열 추출
   - 헤더 키를 소문자로 정규화
   - 필수 컬럼(`date`, `ratio2`, `ctrl_area`) 없으면 `null` 반환
@@ -50,7 +50,7 @@
   - design.md 섹션 4-4 참고
   - **파일**: `trias_standalone.html`
 
-- [~] 8. `parseXlsx(file)` 함수 구현
+- [ ] 8. `parseXlsx(file)` 함수 구현
   - `setUploadMsg("loading", "파싱 중...")` 호출
   - `FileReader.readAsArrayBuffer` 로 파일 읽기
   - `XLSX.read(buffer, {type:"array"})` 로 workbook 생성
@@ -63,25 +63,25 @@
   - design.md 섹션 4-3 참고
   - **파일**: `trias_standalone.html`
 
-- [~] 9. `resetData()` 함수 구현
+- [ ] 9. `resetData()` 함수 구현
   - `INIT_DATA` 를 이용해 `DATA` 를 원래 하드코딩 상태로 복원
   - `rebuildSheetSelect()` → `selIdx=0` → `refresh()` 호출
   - `#upload-msg` 초기화, `#btn-reset` 숨김, `#file-input` 값 초기화
   - design.md 섹션 4-6 참고
   - **파일**: `trias_standalone.html`
 
-- [~] 10. `init()` 에 이벤트 바인딩 추가
+- [ ] 10. `init()` 에 이벤트 바인딩 추가
   - `#file-input` change 이벤트 → `parseXlsx()` 호출
   - `#upload-zone` dragover / dragleave / drop 이벤트 → 드래그&드롭 지원
   - design.md 섹션 4-2 참고
   - **파일**: `trias_standalone.html`
 
-- [~] 11. `init()` 내 `rebuildSheetSelect()` 로 초기화 통합
+- [ ] 11. `init()` 내 `rebuildSheetSelect()` 로 초기화 통합
   - 기존 `init()` 의 시트 드롭다운 생성 코드를 `rebuildSheetSelect()` 호출로 교체한다
   - 중복 코드 제거
   - **파일**: `trias_standalone.html`
 
-- [~] 12. 동작 검증
+- [ ] 12. 동작 검증
   - 샘플 xlsx 파일 업로드 시 드롭다운에 시트명이 나타나는지 확인
   - 커브 차트와 추이 차트가 업로드 데이터로 갱신되는지 확인
   - AI 분석 버튼이 업로드 데이터를 기반으로 프롬프트를 생성하는지 확인

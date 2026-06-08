@@ -78,11 +78,37 @@ textarea{resize:vertical;min-height:56px;line-height:1.5}
 .upload-msg.ok{background:#dcfce7;color:#166534;display:block}
 .upload-msg.err{background:#fee2e2;color:#991b1b;display:block}
 .upload-msg.loading{background:#f0f4ff;color:#3b5bdb;display:block}
+.upload-progress{display:none;margin-top:8px}
+.upload-progress.on{display:block}
+.upload-progress-track{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden}
+.upload-progress-fill{height:100%;width:0%;background:linear-gradient(90deg,#6366f1,#0ea5e9);border-radius:4px;transition:width .25s ease}
+.upload-progress-meta{display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#6366f1;font-weight:600}
+.parse-overlay{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:9999;display:none;align-items:center;justify-content:center}
+.parse-overlay.on{display:flex}
+.parse-overlay-box{background:#fff;border-radius:12px;padding:22px 26px;width:min(380px,92vw);box-shadow:0 16px 40px rgba(0,0,0,.28)}
+.parse-overlay-title{font-size:14px;font-weight:700;color:#1a3a5c;margin-bottom:12px;text-align:center}
+.parse-overlay-track{height:14px;background:#e2e8f0;border-radius:7px;overflow:hidden}
+.parse-overlay-fill{height:14px;width:0%;background:linear-gradient(90deg,#6366f1,#0ea5e9);border-radius:7px;transition:width .25s ease}
+.parse-overlay-meta{display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:#6366f1;font-weight:600}
 .btn-reset{background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;width:100%;padding:6px;border-radius:6px;font-size:11px;cursor:pointer;font-family:inherit}
 .btn-reset:hover{background:#e2e8f0}
 </style>
 </head>
 <body>
+
+<div class="parse-overlay" id="parse-overlay" aria-hidden="true">
+  <div class="parse-overlay-box">
+    <div class="parse-overlay-title">📊 데이터 파싱 중</div>
+    <div class="parse-overlay-track">
+      <div class="parse-overlay-fill" id="parse-overlay-fill"></div>
+    </div>
+    <div class="parse-overlay-meta">
+      <span id="parse-overlay-label">준비 중...</span>
+      <span id="parse-overlay-pct">0%</span>
+    </div>
+  </div>
+</div>
+
 <header>
   <div>
     <h1>🏥 TRIAS AI 분석 뷰어</h1>
@@ -100,9 +126,18 @@ textarea{resize:vertical;min-height:56px;line-height:1.5}
           <input type="file" id="file-input" accept=".xlsx,.xls">
           <div class="uz-icon">📊</div>
           <div class="uz-label">xlsx 파일 클릭 또는 드롭</div>
-          <div class="uz-sub">TRIAS-3 측정 데이터 (.xlsx)</div>
+          <div class="uz-sub">TRIAS-3 rawdata / 테이블 · 대용량(10MB+)은 30초~1분 소요</div>
         </label>
         <div class="upload-msg" id="upload-msg"></div>
+        <div class="upload-progress" id="upload-progress">
+          <div class="upload-progress-track">
+            <div class="upload-progress-fill" id="upload-progress-fill"></div>
+          </div>
+          <div class="upload-progress-meta">
+            <span id="upload-progress-label">준비 중...</span>
+            <span id="upload-progress-pct">0%</span>
+          </div>
+        </div>
         <button class="btn-reset" id="btn-reset" style="display:none" onclick="resetData()">↩ 초기 데이터로 되돌리기</button>
       </div>
     </div>
@@ -220,27 +255,675 @@ const BCOLORS={Fast1:"#6366f1",Fast2:"#0ea5e9",Fast3:"#10b981",Fast4:"#f59e0b",F
 const BLOCKS=["Fast1","Fast2","Fast3","Fast4","Final"];
 let selIdx=0, chCurve=null, chTrend=null, abortCtrl=null;
 
+// ── UI 갱신 양보 (프로그레스바가 그려진 뒤 무거운 작업 실행)
+function yieldUI(fn){
+  requestAnimationFrame(() => setTimeout(fn, 0))
+}
+
+// ── 업로드 프로그레스바 (사이드바 + 화면 중앙 오버레이)
+function showParseOverlay(){
+  const el = document.getElementById("parse-overlay")
+  el.classList.add("on")
+  el.setAttribute("aria-hidden", "false")
+}
+
+function hideParseOverlay(){
+  const el = document.getElementById("parse-overlay")
+  el.classList.remove("on")
+  el.setAttribute("aria-hidden", "true")
+}
+
+function setUploadProgress(pct, label){
+  const n = Math.min(100, Math.max(0, pct))
+  const pctText = Math.round(n) + "%"
+  document.getElementById("upload-progress").classList.add("on")
+  document.getElementById("upload-progress-fill").style.width = n + "%"
+  document.getElementById("upload-progress-pct").textContent = pctText
+  document.getElementById("parse-overlay-fill").style.width = n + "%"
+  document.getElementById("parse-overlay-pct").textContent = pctText
+  if(label){
+    document.getElementById("upload-progress-label").textContent = label
+    document.getElementById("parse-overlay-label").textContent = label
+  }
+  showParseOverlay()
+}
+
+function hideUploadProgress(){
+  hideParseOverlay()
+  document.getElementById("upload-progress").classList.remove("on")
+  document.getElementById("upload-progress-fill").style.width = "0%"
+  document.getElementById("upload-progress-pct").textContent = "0%"
+  document.getElementById("parse-overlay-fill").style.width = "0%"
+  document.getElementById("parse-overlay-pct").textContent = "0%"
+}
+
 // ── 업로드 메시지 헬퍼
 function setUploadMsg(type, text){
   const el = document.getElementById("upload-msg")
   el.className = "upload-msg" + (type ? " "+type : "")
   el.textContent = text
+  el.style.display = type ? "block" : "none"
   document.getElementById("btn-reset").style.display =
     (type === "ok") ? "block" : "none"
+  document.getElementById("loading").classList.toggle("on", type === "loading")
+  if(type === "loading") showParseOverlay()
+  else hideUploadProgress()
 }
 
-// ── 초기화
+// ── 시트 드롭다운 재구성 (태스크 6)
+function rebuildSheetSelect(){
+  const sel = document.getElementById("sel-sheet")
+  sel.innerHTML = ""
+  Object.keys(DATA).forEach(s => {
+    const o = document.createElement("option")
+    o.value = s
+    o.textContent = s
+    sel.appendChild(o)
+  })
+}
+
+// ── 셀 값 읽기 헬퍼
+function getCellVal(ws, R, C){
+  const cell = ws[XLSX.utils.encode_cell({r:R, c:C})]
+  return cell ? cell.v : null
+}
+
+const RAW_BLOCK_MAP = {1:"Fast1", 2:"Fast2", 3:"Fast3", 4:"Fast4"}
+
+function parseRatioLine(s){
+  const m = String(s).match(/tarea\s*=\s*([\d.+-]+).*?carea\s*=\s*([\d.+-]+).*?ratio\s*=\s*([\d.+-]+)/i)
+  return m ? {t2_area:+m[1], ctrl_area:+m[2], ratio2:+m[3]} : null
+}
+
+// 표준 테이블 형식 여부 (date·ratio2·ctrl_area 헤더)
+function isTabularSheet(ws){
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1")
+  const headers = new Set()
+  for(let C = range.s.c; C <= range.e.c; C++){
+    const v = getCellVal(ws, range.s.r, C)
+    if(v != null) headers.add(String(v).toLowerCase().trim())
+  }
+  return headers.has("date") && headers.has("ratio2") && headers.has("ctrl_area")
+}
+
+// TRIAS-3 기기 rawdata 형식 여부 (* CH START *, #Avg.Data#)
+function isRawTriasSheet(ws){
+  if(isTabularSheet(ws)) return false
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1")
+  for(let C = range.s.c; C <= Math.min(range.e.c, range.s.c + 5); C++){
+    const v = getCellVal(ws, range.s.r, C)
+    if(typeof v === "string" && v.includes("START")) return true
+  }
+  for(let R = range.s.r; R <= Math.min(range.e.r, range.s.r + 100); R++){
+    for(let C = range.s.c; C <= Math.min(range.e.c, range.s.c + 30); C++){
+      const v = getCellVal(ws, R, C)
+      if(typeof v === "string" && v.includes("#Avg.Data#")) return true
+    }
+  }
+  return false
+}
+
+// rawdata 시트 → BlockData (#Avg.Data# 마커만 추출, 전체 셀 스캔 회피)
+function sheetToDataRaw(ws){
+  const avgCells = []
+  for(const addr of Object.keys(ws)){
+    if(addr[0] === "!") continue
+    const cell = ws[addr]
+    if(!cell || typeof cell.v !== "string" || !cell.v.includes("#Avg.Data#")) continue
+    const {r, c} = XLSX.utils.decode_cell(addr)
+    avgCells.push({r, c, v: cell.v})
+  }
+  if(!avgCells.length) return null
+
+  const colsNeeded = new Set(avgCells.map(a => a.c))
+  const colRows = new Map()
+  for(const col of colsNeeded) colRows.set(col, new Map())
+
+  for(const addr of Object.keys(ws)){
+    if(addr[0] === "!") continue
+    const {r, c} = XLSX.utils.decode_cell(addr)
+    if(!colsNeeded.has(c)) continue
+    colRows.get(c).set(r, ws[addr].v)
+  }
+
+  const colVal = (c, r) => colRows.get(c)?.get(r) ?? null
+  const measMap = new Map()
+
+  for(const {r: R, c: C, v} of avgCells){
+    const chM = v.match(/CH(\d+)/)
+    const block = RAW_BLOCK_MAP[+(chM && chM[1])] || "Final"
+
+    let ratio = null, date = null, item1 = null, item2 = null
+    for(let back = R - 1; back >= R - 10; back--){
+      const bv = colVal(C, back)
+      if(typeof bv === "string" && bv.includes("ratio =") && !ratio) ratio = parseRatioLine(bv)
+    }
+    if(!ratio) continue
+
+    const curve50 = []
+    for(let fwd = R + 1; fwd <= R + 60; fwd++){
+      const cv = colVal(C, fwd)
+      if(typeof cv === "number") curve50.push(cv)
+      else if(cv != null && curve50.length) break
+      if(curve50.length >= 50) break
+    }
+
+    for(let fwd = R + 1; fwd <= R + 600; fwd++){
+      const fv = colVal(C, fwd)
+      if(typeof fv !== "string") continue
+      if(fv.includes("Measure Date:") && !date) date = fv.split("Measure Date:")[1].trim()
+      if(fv.includes("item1_result") && !item1) item1 = fv.split("item1_result")[1].trim().split(/\s+/)[0]
+      if(fv.includes("item2_result") && !item2) item2 = fv.split("item2_result")[1].trim().split(/\s+/)[0]
+    }
+
+    const dateKey = date || ("row" + R + "_col" + C)
+    const key = C + "|" + dateKey
+    if(!measMap.has(key)) measMap.set(key, {col: C + 1, blocks: {}})
+    measMap.get(key).blocks[block] = {
+      date: date || "",
+      ratio2: ratio.ratio2,
+      ctrl_area: ratio.ctrl_area,
+      t2_area: ratio.t2_area,
+      det_FluA: 0,
+      det_FluB: 0,
+      item1: item1,
+      item2: item2,
+      curve50,
+      stats: {baseline:0, t2_peak:0, t2_pos:0, c_peak:0, c_pos:0, snr_t2:0, snr_c:0}
+    }
+  }
+
+  const measurements = Array.from(measMap.values())
+    .filter(m => Object.values(m.blocks).some(b => b.ratio2))
+    .sort((a, b) => {
+      const da = Object.values(a.blocks)[0]?.date || ""
+      const db = Object.values(b.blocks)[0]?.date || ""
+      return da.localeCompare(db)
+    })
+
+  return measurements.length ? measurements : null
+}
+
+// ── Web Worker: 대용량 xlsx 파싱 시 UI 멈춤 방지
+let xlsxWorker = null
+let xlsxWorkerUrl = null
+let xlsxLibCache = null
+
+const XLSX_WORKER_PARSER = `
+const RAW_BLOCK_MAP = {1:"Fast1",2:"Fast2",3:"Fast3",4:"Fast4"};
+function parseRatioLine(s){
+  const m = String(s).match(/tarea\\s*=\\s*([\\d.+-]+).*?carea\\s*=\\s*([\\d.+-]+).*?ratio\\s*=\\s*([\\d.+-]+)/i);
+  return m ? {t2_area:+m[1],ctrl_area:+m[2],ratio2:+m[3]} : null;
+}
+function isTabularSheet(ws){
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+  const headers = new Set();
+  for(let C = range.s.c; C <= range.e.c; C++){
+    const cell = ws[XLSX.utils.encode_cell({r:range.s.r,c:C})];
+    if(cell) headers.add(String(cell.v).toLowerCase().trim());
+  }
+  return headers.has("date") && headers.has("ratio2") && headers.has("ctrl_area");
+}
+function isRawTriasSheet(ws){
+  if(isTabularSheet(ws)) return false;
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+  for(let C = range.s.c; C <= Math.min(range.e.c, range.s.c+5); C++){
+    const cell = ws[XLSX.utils.encode_cell({r:range.s.r,c:C})];
+    if(cell && typeof cell.v==="string" && cell.v.includes("START")) return true;
+  }
+  for(let R = range.s.r; R <= Math.min(range.e.r, range.s.r+100); R++){
+    for(let C = range.s.c; C <= Math.min(range.e.c, range.s.c+30); C++){
+      const cell = ws[XLSX.utils.encode_cell({r:R,c:C})];
+      if(cell && typeof cell.v==="string" && cell.v.includes("#Avg.Data#")) return true;
+    }
+  }
+  return false;
+}
+function sheetToDataRaw(ws, report){
+  const allKeys = Object.keys(ws).filter(k=>k[0]!=="!");
+  const avgCells = [];
+  for(let i=0;i<allKeys.length;i++){
+    const addr=allKeys[i];
+    const cell=ws[addr];
+    if(cell && typeof cell.v==="string" && cell.v.includes("#Avg.Data#")){
+      const rc=XLSX.utils.decode_cell(addr);
+      avgCells.push({r:rc.r,c:rc.c,v:cell.v});
+    }
+    if(report && i%40000===0) report(52+8*(i/allKeys.length),"측정 마커 검색 중...");
+  }
+  if(!avgCells.length) return null;
+  if(report) report(62,"컬럼 데이터 인덱싱 중...");
+  const colsNeeded = new Set(avgCells.map(a=>a.c));
+  const colRows = new Map();
+  for(const col of colsNeeded) colRows.set(col,new Map());
+  for(let i=0;i<allKeys.length;i++){
+    const addr=allKeys[i];
+    const rc=XLSX.utils.decode_cell(addr);
+    if(!colsNeeded.has(rc.c)) continue;
+    colRows.get(rc.c).set(rc.r, ws[addr].v);
+    if(report && i%40000===0) report(62+13*(i/allKeys.length),"컬럼 데이터 인덱싱 중...");
+  }
+  const colVal = (c,r)=>{const m=colRows.get(c);return m?m.get(r)??null:null;};
+  const measMap = new Map();
+  for(let ai=0;ai<avgCells.length;ai++){
+    const {r:R,c:C,v}=avgCells[ai];
+    const chM = v.match(/CH(\\d+)/);
+    const block = RAW_BLOCK_MAP[+(chM&&chM[1])] || "Final";
+    let ratio=null,date=null,item1=null,item2=null;
+    for(let back=R-1;back>=R-10;back--){
+      const bv=colVal(C,back);
+      if(typeof bv==="string" && bv.includes("ratio =") && !ratio) ratio=parseRatioLine(bv);
+    }
+    if(!ratio) continue;
+    const curve50=[];
+    for(let fwd=R+1;fwd<=R+60;fwd++){
+      const cv=colVal(C,fwd);
+      if(typeof cv==="number") curve50.push(cv);
+      else if(cv!=null&&curve50.length) break;
+      if(curve50.length>=50) break;
+    }
+    for(let fwd=R+1;fwd<=R+600;fwd++){
+      const fv=colVal(C,fwd);
+      if(typeof fv!=="string") continue;
+      if(fv.includes("Measure Date:")&&!date) date=fv.split("Measure Date:")[1].trim();
+      if(fv.includes("item1_result")&&!item1) item1=fv.split("item1_result")[1].trim().split(/\\s+/)[0];
+      if(fv.includes("item2_result")&&!item2) item2=fv.split("item2_result")[1].trim().split(/\\s+/)[0];
+    }
+    const dateKey=date||("row"+R+"_col"+C);
+    const key=C+"|"+dateKey;
+    if(!measMap.has(key)) measMap.set(key,{col:C+1,blocks:{}});
+    measMap.get(key).blocks[block]={
+      date:date||"",ratio2:ratio.ratio2,ctrl_area:ratio.ctrl_area,t2_area:ratio.t2_area,
+      det_FluA:0,det_FluB:0,item1,item2,curve50,
+      stats:{baseline:0,t2_peak:0,t2_pos:0,c_peak:0,c_pos:0,snr_t2:0,snr_c:0}
+    };
+    if(report && ai%80===0) report(78+17*(ai/avgCells.length),"측정 데이터 추출 중...");
+  }
+  if(report) report(96,"결과 정리 중...");
+  const measurements=Array.from(measMap.values())
+    .filter(m=>Object.values(m.blocks).some(b=>b.ratio2))
+    .sort((a,b)=>{
+      const da=Object.values(a.blocks)[0]?.date||"";
+      const db=Object.values(b.blocks)[0]?.date||"";
+      return da.localeCompare(db);
+    });
+  return measurements.length?measurements:null;
+}
+function sheetToData(wb,sheetName){
+  const ws=wb.Sheets[sheetName];
+  if(!ws||!isTabularSheet(ws)) return null;
+  const rows=XLSX.utils.sheet_to_json(ws,{defval:null});
+  if(!rows.length) return null;
+  const normRows=rows.map(r=>{const out={};Object.keys(r).forEach(k=>{out[k.toLowerCase().trim()]=r[k];});return out;});
+  const first=normRows[0];
+  if(first.date===undefined||first.ratio2===undefined||first.ctrl_area===undefined) return null;
+  const BLOCK_ORDER=["Fast1","Fast2","Fast3","Fast4","Final"];
+  const dateMap={};
+  normRows.forEach(r=>{const d=String(r.date||"");if(!dateMap[d])dateMap[d]=[];dateMap[d].push(r);});
+  const measurements=[];let colIdx=2;
+  Object.keys(dateMap).forEach(dateKey=>{
+    const group=dateMap[dateKey];const blocks={};
+    group.forEach((r,i)=>{
+      let blockName=r.block||r.stage||BLOCK_ORDER[i]||("Fast"+(i+1));
+      if(!BLOCK_ORDER.includes(blockName)) blockName=BLOCK_ORDER[i]||"Final";
+      let curve50=[];
+      for(let ci=0;ci<50;ci++){
+        const v=r["p"+ci]??r["curve_"+ci]??r["p"+String(ci).padStart(2,"0")]??null;
+        curve50.push(v!==null?Number(v):0);
+      }
+      if(curve50.every(v=>v===0)) curve50=[];
+      blocks[blockName]={
+        date:String(r.date||""),ratio2:Number(r.ratio2||0),ctrl_area:Number(r.ctrl_area||0),
+        t2_area:Number(r.t2_area||0),det_FluA:Number(r.det_flua??r.det_fla??0),
+        det_FluB:Number(r.det_flub??r.det_flb??0),item1:r.item1||null,item2:r.item2||null,
+        curve50,stats:{baseline:Number(r.baseline||0),t2_peak:Number(r.t2_peak||0),
+          t2_pos:Number(r.t2_pos||0),c_peak:Number(r.c_peak||0),c_pos:Number(r.c_pos||0),
+          snr_t2:Number(r.snr_t2||0),snr_c:Number(r.snr_c||0)}
+      };
+    });
+    measurements.push({col:colIdx++,blocks});
+  });
+  return measurements.length?measurements:null;
+}
+function reportProgress(pct,text){
+  self.postMessage({type:"progress",pct,text});
+}
+self.onmessage=function(e){
+  const {buffer,fileName}=e.data;
+  try{
+    reportProgress(30,"엑셀 파일 읽는 중...");
+    const wb=XLSX.read(new Uint8Array(buffer),{type:"array"});
+    reportProgress(48,"시트 형식 확인 중...");
+    const result={};let totalMeas=0,rawSheets=0;
+    const names=wb.SheetNames;
+    for(let si=0;si<names.length;si++){
+      const sName=names[si];
+      const ws=wb.Sheets[sName];if(!ws) continue;
+      const label=names.length===1?fileName.replace(/\\.xlsx?$/i,""):sName;
+      let parsed=null;
+      if(isRawTriasSheet(ws)){
+        parsed=sheetToDataRaw(ws,reportProgress);
+        if(parsed) rawSheets++;
+      }else{
+        reportProgress(70,"테이블 데이터 변환 중...");
+        parsed=sheetToData(wb,sName);
+      }
+      if(parsed){result[label]=parsed;totalMeas+=parsed.length;}
+    }
+    if(!Object.keys(result).length){
+      self.postMessage({type:"error",message:"지원하지 않는 형식입니다."});
+      return;
+    }
+    reportProgress(100,"완료");
+    self.postMessage({type:"done",result,totalMeas,rawSheets,fileName});
+  }catch(err){
+    self.postMessage({type:"error",message:err.message||String(err)});
+  }
+};`
+
+async function buildXlsxWorker(){
+  if(xlsxWorker) return xlsxWorker
+  if(!xlsxLibCache){
+    const res = await fetch("https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js")
+    if(!res.ok) throw new Error("SheetJS CDN 로드 실패")
+    xlsxLibCache = await res.text()
+  }
+  const src = xlsxLibCache + XLSX_WORKER_PARSER
+  xlsxWorkerUrl = URL.createObjectURL(new Blob([src], {type: "application/javascript"}))
+  xlsxWorker = new Worker(xlsxWorkerUrl)
+  return xlsxWorker
+}
+
+function terminateXlsxWorker(){
+  if(xlsxWorker){ xlsxWorker.terminate(); xlsxWorker = null }
+  if(xlsxWorkerUrl){ URL.revokeObjectURL(xlsxWorkerUrl); xlsxWorkerUrl = null }
+}
+
+// ── 엑셀 시트 → BlockData 변환 (태스크 7, 표준 테이블 형식)
+function sheetToData(wb, sheetName){
+  const ws = wb.Sheets[sheetName]
+  if(!ws || !isTabularSheet(ws)) return null
+  const rows = XLSX.utils.sheet_to_json(ws, {defval: null})
+  if(!rows.length) return null
+
+  // 헤더 소문자 정규화
+  const normRows = rows.map(r => {
+    const out = {}
+    Object.keys(r).forEach(k => { out[k.toLowerCase().trim()] = r[k] })
+    return out
+  })
+
+  // 필수 컬럼 체크
+  const first = normRows[0]
+  if(first.date === undefined || first.ratio2 === undefined || first.ctrl_area === undefined) return null
+
+  // 블록 이름 매핑
+  const BLOCK_ORDER = ["Fast1","Fast2","Fast3","Fast4","Final"]
+
+  // date 기준으로 측정 묶기: 같은 date 내 순서로 블록 자동 분류
+  const dateMap = {}  // date → [row, ...]
+  normRows.forEach(r => {
+    const d = String(r.date || "")
+    if(!dateMap[d]) dateMap[d] = []
+    dateMap[d].push(r)
+  })
+
+  const measurements = []
+  let colIdx = 2
+  Object.keys(dateMap).forEach(dateKey => {
+    const group = dateMap[dateKey]
+    const blocks = {}
+    group.forEach((r, i) => {
+      // block 컬럼 우선, 없으면 순서로
+      let blockName = r.block || r.stage || BLOCK_ORDER[i] || ("Fast" + (i+1))
+      if(!BLOCK_ORDER.includes(blockName)) blockName = BLOCK_ORDER[i] || "Final"
+
+      // curve50 조합: p0~p49 또는 curve_0~curve_49
+      let curve50 = []
+      for(let ci = 0; ci < 50; ci++){
+        const v = r[`p${ci}`] ?? r[`curve_${ci}`] ?? r[`p${String(ci).padStart(2,'0')}`] ?? null
+        curve50.push(v !== null ? Number(v) : 0)
+      }
+      if(curve50.every(v => v === 0)) curve50 = []
+
+      blocks[blockName] = {
+        date:      String(r.date || ""),
+        ratio2:    Number(r.ratio2 || 0),
+        ctrl_area: Number(r.ctrl_area || 0),
+        t2_area:   Number(r.t2_area || 0),
+        det_FluA:  Number(r.det_flua ?? r.det_fla ?? 0),
+        det_FluB:  Number(r.det_flub ?? r.det_flb ?? 0),
+        item1:     r.item1 || null,
+        item2:     r.item2 || null,
+        curve50:   curve50,
+        stats: {
+          baseline: Number(r.baseline || 0),
+          t2_peak:  Number(r.t2_peak  || 0),
+          t2_pos:   Number(r.t2_pos   || 0),
+          c_peak:   Number(r.c_peak   || 0),
+          c_pos:    Number(r.c_pos    || 0),
+          snr_t2:   Number(r.snr_t2   || 0),
+          snr_c:    Number(r.snr_c    || 0)
+        }
+      }
+    })
+    measurements.push({ col: colIdx++, blocks })
+  })
+
+  return measurements.length ? measurements : null
+}
+
+// ── xlsx 파싱 결과 반영
+function applyParsedData(result, totalMeas, rawSheets, fileName){
+  setUploadProgress(98, "화면 갱신 중...")
+  Object.keys(DATA).forEach(k => delete DATA[k])
+  Object.assign(DATA, result)
+  rebuildSheetSelect()
+  selIdx = 0
+  setTimeout(() => {
+    refresh()
+    setUploadProgress(100, "완료")
+    const n = Object.keys(result).length
+    const fmt = rawSheets ? "rawdata" : "테이블"
+    setUploadMsg("ok", `✅ ${n}개 시트 · ${totalMeas}건 로드 (${fmt}, ${fileName})`)
+  }, 0)
+}
+
+// ── xlsx 파일 파싱 (Web Worker 사용, UI 멈춤 방지)
+function parseXlsx(file){
+  terminateXlsxWorker()
+  showParseOverlay()
+  setUploadProgress(1, "파일 준비 중...")
+  setUploadMsg("loading", "⏳ 파일 준비 중...")
+  yieldUI(() => parseXlsxStart(file))
+}
+
+function parseXlsxStart(file){
+  const sizeMB = file.size / 1024 / 1024
+  const useWorker = sizeMB > 1
+
+  if(!useWorker){
+    parseXlsxSync(file)
+    return
+  }
+
+  const sizeHint = ` (${sizeMB.toFixed(1)}MB)`
+  setUploadProgress(2, "파일 읽는 중...")
+  setUploadMsg("loading", "⏳ 파일 읽는 중..." + sizeHint)
+  const reader = new FileReader()
+  reader.onprogress = e => {
+    if(e.lengthComputable){
+      const pct = 2 + (e.loaded / e.total) * 13
+      setUploadProgress(pct, "파일 읽는 중...")
+      setUploadMsg("loading", `⏳ 파일 읽는 중... ${Math.round(pct)}%` + sizeHint)
+    }
+  }
+  reader.onload = e => {
+    const bufferCopy = e.target.result.slice(0)
+    setUploadProgress(18, "Worker 준비 중...")
+    setUploadMsg("loading", "⏳ Worker 준비 중..." + sizeHint)
+    yieldUI(() => buildXlsxWorker().then(worker => {
+      setUploadProgress(22, "파싱 시작...")
+      setUploadMsg("loading", "⏳ 파싱 중..." + sizeHint)
+      worker.onmessage = ev => {
+        const msg = ev.data
+        if(msg.type === "progress"){
+          const pct = msg.pct ?? 50
+          setUploadProgress(pct, msg.text || "처리 중...")
+          setUploadMsg("loading", `⏳ ${msg.text || "처리 중..."} ${Math.round(pct)}%` + sizeHint)
+          return
+        }
+        if(msg.type === "error"){
+          terminateXlsxWorker()
+          const errText = /memory|allocation|too large/i.test(msg.message)
+            ? "❌ 파일이 너무 커서 브라우저 메모리 부족. Chrome 사용 또는 파일 분할을 권장합니다."
+            : "❌ 파싱 오류: " + msg.message
+          setUploadMsg("err", errText)
+          return
+        }
+        if(msg.type === "done"){
+          terminateXlsxWorker()
+          applyParsedData(msg.result, msg.totalMeas, msg.rawSheets, msg.fileName)
+        }
+      }
+      worker.onerror = () => {
+        terminateXlsxWorker()
+        setUploadProgress(25, "동기 방식 재시도...")
+        setUploadMsg("loading", "⏳ Worker 실패, 동기 방식 재시도...")
+        parseXlsxSync(file, bufferCopy)
+      }
+      worker.postMessage({buffer: e.target.result, fileName: file.name}, [e.target.result])
+    }).catch(() => {
+      setUploadProgress(25, "동기 방식으로 파싱...")
+      setUploadMsg("loading", "⏳ Worker 불가, 동기 방식으로 파싱...")
+      parseXlsxSync(file, bufferCopy)
+    }))
+  }
+  reader.onerror = () => setUploadMsg("err", "❌ 파일 읽기 실패")
+  reader.readAsArrayBuffer(file)
+}
+
+// ── 소용량 파일용 동기 파싱 (폴백)
+function parseXlsxSync(file, buffer){
+  const run = buf => {
+    setUploadProgress(35, "엑셀 파일 읽는 중...")
+    setUploadMsg("loading", "⏳ 엑셀 파일 읽는 중...")
+    yieldUI(() => {
+      try {
+        const wb = XLSX.read(new Uint8Array(buf), {type:"array"})
+        setUploadProgress(55, "측정 데이터 추출 중...")
+        const result = {}
+        let totalMeas = 0, rawSheets = 0
+        wb.SheetNames.forEach(sName => {
+          const ws = wb.Sheets[sName]
+          if(!ws) return
+          const label = wb.SheetNames.length === 1
+            ? file.name.replace(/\.xlsx?$/i, "")
+            : sName
+          let parsed = null
+          if(isRawTriasSheet(ws)){
+            parsed = sheetToDataRaw(ws)
+            if(parsed) rawSheets++
+          } else {
+            parsed = sheetToData(wb, sName)
+          }
+          if(parsed){
+            result[label] = parsed
+            totalMeas += parsed.length
+          }
+        })
+        if(!Object.keys(result).length){
+          setUploadMsg("err", "❌ 지원하지 않는 형식입니다. 표준 테이블(date·ratio2·ctrl_area) 또는 TRIAS-3 rawdata 파일을 사용하세요.")
+          return
+        }
+        setUploadProgress(92, "결과 적용 중...")
+        applyParsedData(result, totalMeas, rawSheets, file.name)
+      } catch(err) {
+        const msg = err.message || String(err)
+        if(/memory|allocation|too large/i.test(msg)){
+          setUploadMsg("err", "❌ 파일이 너무 커서 브라우저 메모리 부족. Chrome을 사용해 보세요.")
+        } else {
+          setUploadMsg("err", "❌ 파싱 오류: " + msg)
+        }
+      }
+    })
+  }
+
+  if(buffer){
+    run(buffer)
+    return
+  }
+
+  showParseOverlay()
+  setUploadProgress(2, "파일 읽는 중...")
+  setUploadMsg("loading", "⏳ 파싱 중...")
+  const reader = new FileReader()
+  reader.onprogress = e => {
+    if(e.lengthComputable){
+      const pct = 2 + (e.loaded / e.total) * 18
+      setUploadProgress(pct, "파일 읽는 중...")
+    }
+  }
+  reader.onload = e => run(e.target.result)
+  reader.onerror = () => setUploadMsg("err", "❌ 파일 읽기 실패")
+  reader.readAsArrayBuffer(file)
+}
+
+// ── 초기 데이터로 되돌리기 (태스크 9)
+function resetData(){
+  Object.keys(DATA).forEach(k => delete DATA[k])
+  Object.assign(DATA, JSON.parse(JSON.stringify(INIT_DATA)))
+  rebuildSheetSelect()
+  selIdx = 0
+  refresh()
+  setUploadMsg("", "")
+  document.getElementById("upload-msg").style.display = "none"
+  document.getElementById("btn-reset").style.display = "none"
+  document.getElementById("file-input").value = ""
+}
+
+// ── 초기화 (태스크 10·11 반영)
 function init(){
-  const sheets=Object.keys(DATA);
-  const sel=document.getElementById("sel-sheet");
-  sheets.forEach(s=>{const o=document.createElement("option");o.value=s;o.textContent=s;sel.appendChild(o);});
-  sel.onchange=()=>{selIdx=0;refresh()};
-  document.getElementById("sel-block").onchange=refresh;
-  document.getElementById("sel-model").onchange=()=>{
-    document.getElementById("model-lbl").textContent=document.getElementById("sel-model").selectedOptions[0].text;
-  };
-  document.getElementById("model-lbl").textContent=document.getElementById("sel-model").selectedOptions[0].text;
-  refresh();
+  rebuildSheetSelect()  // 태스크 11: 기존 인라인 코드 → rebuildSheetSelect()
+
+  const sel = document.getElementById("sel-sheet")
+  sel.onchange = () => { selIdx = 0; refresh() }
+  document.getElementById("sel-block").onchange = refresh
+  document.getElementById("sel-model").onchange = () => {
+    document.getElementById("model-lbl").textContent = document.getElementById("sel-model").selectedOptions[0].text
+  }
+  document.getElementById("model-lbl").textContent = document.getElementById("sel-model").selectedOptions[0].text
+
+  // 태스크 10: 파일 input 이벤트
+  document.getElementById("file-input").addEventListener("change", e => {
+    if(e.target.files[0]) parseXlsx(e.target.files[0])
+  })
+
+  // 태스크 10: 드래그&드롭
+  const zone = document.getElementById("upload-zone")
+  zone.addEventListener("dragover", e => {
+    e.preventDefault()
+    zone.style.borderColor = "#6366f1"
+    zone.style.background = "#eef0ff"
+  })
+  zone.addEventListener("dragleave", () => {
+    zone.style.borderColor = ""
+    zone.style.background = ""
+  })
+  zone.addEventListener("drop", e => {
+    e.preventDefault()
+    zone.style.borderColor = ""
+    zone.style.background = ""
+    const file = e.dataTransfer.files[0]
+    if(file && (file.name.endsWith(".xlsx") || file.name.endsWith(".xls"))){
+      document.getElementById("file-input").value = ""
+      parseXlsx(file)
+    } else {
+      setUploadMsg("err", "❌ .xlsx 또는 .xls 파일만 지원합니다")
+    }
+  })
+
+  refresh()
 }
 
 function refresh(){renderList();renderCurve();renderTrend();}
